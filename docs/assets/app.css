@@ -576,3 +576,29 @@ footer.site .fine { border-top: 1px solid var(--line); padding-top: 14px; }
   footer.site .cols { grid-template-columns: 1fr 1fr; }
   .topbar .follow { display: none; }
 }
+
+/* 원인 분석 */
+.why { display: grid; gap: 14px; }
+.why-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.why-head strong { font-size: 16px; line-height: 1.45; }
+.why-rows { display: grid; }
+.why-row { display: grid; grid-template-columns: minmax(170px, 1.3fr) auto minmax(120px, 1fr) 48px; gap: 12px; align-items: center; padding: 10px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.why-row:first-child { border-top: 0; }
+.why-row .who { display: flex; gap: 10px; align-items: center; min-width: 0; }
+.why-row .who > span:last-child { display: grid; font-weight: 600; }
+.why-row small { font-weight: 400; color: var(--muted); font-size: 11.5px; }
+.dbar { position: relative; height: 10px; background: var(--sunk); border-radius: 5px; }
+.dbar::after { content: ""; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 1px; background: var(--line-strong); }
+.dbar span { position: absolute; top: 0; bottom: 0; border-radius: 5px; }
+.dbar .more { background: var(--bad); }
+.dbar .less { background: var(--good); }
+.why-row .d { text-align: right; font-weight: 600; }
+.why-row .d.more { color: var(--bad); }
+.why-row .d.less { color: var(--good); }
+.why-foot { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 13px; }
+.mlog { display: grid; grid-template-columns: auto 1fr; gap: 10px; align-items: start; font-size: 13px; padding-top: 10px; border-top: 1px solid var(--line); }
+.mlog:first-of-type { border-top: 0; padding-top: 0; }
+@media (max-width: 640px) {
+  .why-row { grid-template-columns: 1fr auto; }
+  .why-row .dbar { grid-column: 1 / -1; order: 4; }
+}
