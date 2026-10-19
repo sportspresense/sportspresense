@@ -32,8 +32,10 @@
   const rgb = (h) => { const n = parseInt(h.replace("#", ""), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
   const lum = (h) => { const [r, g, b] = rgb(h).map((v) => v / 255); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
   const near = (a, b) => { const x = rgb(a), y = rgb(b); return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]) < 90; };
+  // 어두운 팀색(검정·남색 등)은 다크 모드에서만 밝게 올려 배경에 묻히지 않게
+  const lift = (c) => (lum(c) < 0.16 ? `color-mix(in srgb, ${c}, #ffffff var(--lift))` : c);
   function pair(home, away) {
-    const fix = (c) => (lum(c) < 0.08 ? "var(--dark-team)" : c);
+    const fix = lift;
     const h = fix(home.color), a = fix(away.color);
     const clash = (h === a) || (h[0] === "#" && a[0] === "#" && near(home.color, away.color));
     return { home: h, away: clash ? "var(--neutral-team)" : a };
@@ -68,7 +70,8 @@
       </div></header>
       ${r.view === "method" ? "" : `<div class="leaguebar gutter"><div class="wrap" role="group" aria-label="리그 선택">
         ${idx.leagues.map((l) => `<button class="lg-tab" data-lg="${l.id}" aria-pressed="${l.id === cur}"><span class="dot${l.status === "live" ? " live" : ""}"></span>${esc(l.name)} <small>${l.status === "live" ? esc(l.label) : "준비 중"}</small></button>`).join("")}
-      </div></div>`}`;
+      </div></div>`}
+      ${r.view === "method" || !idx.leagues.some((l) => l.id === cur && l.status === "live") ? "" : ticker(cur)}`;
     document.querySelectorAll(".lg-tab").forEach((b) => b.addEventListener("click", () => {
       S.league = b.dataset.lg;
       const v = route().view;
@@ -119,66 +122,180 @@
   }
 
   /* ───────── 홈 ───────── */
+  const stageTxt = (g, short) => (g.stage && g.stage.kind === "postseason"
+    ? `${short ? g.stage.name.replace("플레이오프", "PO").replace("한국시리즈", "KS").replace("와일드카드", "WC") : g.stage.name}${g.stage.game_no ? ` ${g.stage.game_no}차전` : ""}`
+    : (g.title || "정규시즌").replace(/^KBO\s*/, ""));
+  const gradeOf = (g) => (g.result && g.result.graded ? g.result.graded.win_ok : null);
+
+  function ticker(lgId) {
+    const idx = S.index;
+    const done = idx.games.filter((g) => g.league === lgId).slice(0, 8).reverse();
+    const up = (idx.upcoming || []).filter((g) => g.league === lgId).slice(0, 4);
+    if (!done.length && !up.length) return "";
+    const item = (g) => {
+      const fin = g.status === "final" && g.result;
+      const ok = gradeOf(g);
+      const fav = g.win ? (g.win.home >= 0.5 ? "home" : "away") : null;
+      return `<a class="tk" href="#g.${g.league}.${g.id}">
+        <span class="tk-when">${fdate(g.date)} · ${esc(stageTxt(g, true))}</span>
+        <span class="tk-row"><span class="tk-t${fin && g.result.away > g.result.home ? " w" : ""}">${esc(g.away.id)}</span><span class="tk-s">${fin ? g.result.away : ""}</span>${fav === "away" && !fin ? `<span class="tk-p">${pct(g.win.away, 0)}</span>` : ""}</span>
+        <span class="tk-row"><span class="tk-t${fin && g.result.home > g.result.away ? " w" : ""}">${esc(g.home.id)}</span><span class="tk-s">${fin ? g.result.home : ""}</span>${fav === "home" && !fin ? `<span class="tk-p">${pct(g.win.home, 0)}</span>` : ""}</span>
+        <span class="tk-st ${fin ? (ok ? "ok" : ok === false ? "miss" : "") : "pre"}">${fin ? (ok == null ? "종료" : ok ? (g.official ? "적중" : "적중 · 참고") : (g.official ? "빗나감" : "빗나감 · 참고")) : "예측 공개"}</span></a>`;
+    };
+    const upItem = (g) => `<div class="tk up"><span class="tk-when">${fdate(g.date)} · ${esc(stageTxt({ stage: null, title: g.title }, true))}</span>
+        <span class="tk-row"><span class="tk-t">${esc(g.away.id)}</span></span><span class="tk-row"><span class="tk-t">${esc(g.home.id)}</span></span>
+        <span class="tk-st">${esc(g.start || "")} · ${esc(g.venue || "")}</span></div>`;
+    return `<div class="board gutter"><div class="wrap board-in">${done.map(item).join("")}${up.length ? '<span class="tk-sep" aria-hidden="true"></span>' : ""}${up.map(upItem).join("")}</div></div>`;
+  }
+
   async function viewHome(lgId) {
     const idx = S.index;
     const rec = idx.records[lgId] || {};
     const bt = rec.backtest || {};
     const games = idx.games.filter((g) => g.league === lgId);
     const t = today();
-    let focus = games.filter((g) => g.date === t);
-    let focusLabel = "오늘의 예측";
-    if (!focus.length && games.length) { const d = games[0].date; focus = games.filter((g) => g.date === d); focusLabel = `최근 예측 · ${fdate(d)}`; }
-    const past = games.filter((g) => !focus.includes(g));
-    const up = (idx.upcoming || []).filter((g) => g.league === lgId || !g.league);
+    const todays = games.filter((g) => g.date === t);
+    const featId = (todays[0] || games[0] || {}).id;
+    const feat = featId ? await tryLoad(`${lgId}/games/${featId}.json`) : null;
+    const others = todays.slice(1);
+    const up = (idx.upcoming || []).filter((g) => g.league === lgId);
+    const offs = games.filter((g) => g.official && gradeOf(g) != null).slice(0, 12).reverse();
+    const recent = games.filter((g) => g.status === "final" && g.result && g.id !== featId).slice(0, 8);
     const offN = rec.games || 0;
     return `
-      <section class="hero">
-        <div class="hero-top"><div>
-          <div class="eyebrow">${fdate(t, true)} · KBO 리그</div>
-          <h1 style="margin-top:8px">경기 전에 공개하고,<br>끝나면 그대로 채점합니다</h1>
-          <p class="lead">승리 확률, 예상 스코어, 선발투수와 타자별 예상 기록까지. 모든 예측은 경기 시작 전에 시각이 기록된 채로 공개되고, 맞든 틀리든 지우지 않습니다.</p>
-        </div></div>
+      ${feat ? featureBlock(feat, todays.length ? "오늘의 경기" : feat.status === "final" ? "최근 경기 결과" : "최근 예측") : `<div class="empty"><strong>예측 준비 중</strong>선발투수가 발표되면 경기 3시간 전쯤 자동으로 올라옵니다.</div>`}
+      ${others.length ? `<section class="section"><h2>오늘의 다른 경기</h2><div class="gcards">${others.map(gameCard).join("")}</div></section>` : ""}
+      <section class="section">
+        <div class="section-head"><h2>예측 성적표</h2><p>경기 전에 공개하고, 끝나면 그대로 채점합니다 · <a href="#record.${lgId}">전체 기록 →</a></p></div>
         <div class="ledger">
-          <div class="official"><span class="k">공식 기록 · 경기 전 발행분</span><span class="v">${offN ? `${rec.wins}<small>/ ${offN}경기</small>` : "집계 시작"}</span><span class="s">${offN ? `승리 예측 적중률 ${pct(rec.acc)}` : "2026 준플레이오프 2차전부터"}</span></div>
-          <div><span class="k">${bt.season || ""} 시즌 백테스트 적중률</span><span class="v">${pct(bt.acc)}</span><span class="s">${bt.games ? `${bt.games}경기 · 경기 전 정보만 사용` : ""}</span></div>
-          <div><span class="k">확률 정확도 (로그손실)</span><span class="v">${f2(bt.logloss, 3)}</span><span class="s">낮을수록 정확 · 동전 던지기 0.693</span></div>
-          <div><span class="k">안타 확률 1위 선수 적중</span><span class="v">${pct(bt.top1_rate)}</span><span class="s">${bt.streak ? `최장 ${bt.streak}일 연속` : ""}</span></div>
+          <div class="official"><span class="k">공식 기록 · 경기 전 공개분</span><span class="v">${offN ? `${rec.wins}<small>/ ${offN}경기</small>` : "집계 시작"}</span>
+            <span class="dots" aria-label="최근 공식 예측 결과">${offs.length ? offs.map((g) => `<i class="${gradeOf(g) ? "ok" : "miss"}" title="${fdate(g.date)} ${esc(g.away.id)}@${esc(g.home.id)}"></i>`).join("") : '<span class="s">2026 준플레이오프 2차전부터</span>'}</span></div>
+          <div><span class="k">${bt.season || ""} 시즌 백테스트 적중률</span><span class="v">${pct(bt.acc)}</span>${meter(bt.acc, 0.5, 0.65, "동전 50%")}</div>
+          <div><span class="k">확률 정확도 · 로그손실</span><span class="v">${f2(bt.logloss, 3)}</span><span class="s">동전 던지기 0.693보다 낮을수록 정확</span></div>
+          <div><span class="k">안타 확률 1위 선수 적중</span><span class="v">${pct(bt.top1_rate)}</span><span class="s">${bt.streak ? `최장 ${bt.streak}일 연속 · ${bt.games || ""}경기 기준` : ""}</span></div>
         </div>
       </section>
-      <section class="section">
-        <div class="section-head"><h2>${focusLabel}</h2><p>카드를 누르면 스코어 분포·선수별 예상 기록·시리즈 전망을 볼 수 있어요</p></div>
-        ${focus.length ? `<div class="gcards">${focus.map(gameCard).join("")}</div>` : `<div class="empty"><strong>오늘은 예측할 경기가 없어요</strong>선발투수가 발표되면 경기 3시간 전쯤 자동으로 올라옵니다.</div>`}
-      </section>
-      ${up.length ? `<section class="section"><div class="section-head"><h2>다가오는 경기</h2><p>선발 발표 후 예측이 열립니다</p></div>
-        <div class="panel flush upcoming">${up.map(upRow).join("")}</div></section>` : ""}
-      ${past.length ? `<section class="section"><div class="section-head"><h2>지난 예측</h2><a class="muted" href="#record.${lgId}" style="font-size:13px">전체 적중 기록 →</a></div>
-        <div class="gcards">${past.slice(0, 9).map(gameCard).join("")}</div></section>` : ""}`;
+      <div class="grid-2 section">
+        <section style="display:grid;gap:14px;align-content:start;min-width:0">
+          <div class="section-head"><h2>다가오는 경기</h2><p>선발 발표 후 정식 예측 공개</p></div>
+          ${up.length ? `<div class="panel flush upcoming">${up.map(upRow).join("")}</div>` : '<div class="empty"><strong>예정된 경기가 없어요</strong>일정이 나오면 자동으로 표시됩니다.</div>'}
+        </section>
+        <section style="display:grid;gap:14px;align-content:start;min-width:0">
+          <div class="section-head"><h2>최근 결과</h2><p>예측한 쪽과 실제 결과</p></div>
+          ${recent.length ? `<div class="panel flush">${recent.map(resultRow).join("")}</div>` : '<div class="empty"><strong>채점된 경기가 아직 없어요</strong>경기가 끝나면 자동으로 채점됩니다.</div>'}
+        </section>
+      </div>`;
+  }
+
+  function meter(v, lo, hi, label) {
+    if (v == null) return "";
+    const x = Math.min(Math.max((v - lo) / (hi - lo), 0), 1) * 100;
+    return `<span class="meter" aria-hidden="true"><span style="width:${x}%"></span></span><span class="s">${label} 대비 +${((v - lo) * 100).toFixed(1)}%p</span>`;
+  }
+
+  function featureBlock(g, label) {
+    const P = g.prediction, c = pair(g.home, g.away);
+    const fin = g.status === "final" && g.result;
+    const sp = g.starters || {};
+    const st = (g.panels || []).find((p) => p.type === "baseball.starters");
+    const lu = (g.panels || []).find((p) => p.type === "baseball.lineups");
+    const act = {};
+    ((g.result || {}).starters || []).forEach((a) => (act[a.team] = a));
+    const pline = (r) => `${r.ip}이닝 ${r.H}피안타 ${r.R}실점${r.HR ? ` ${r.HR}피홈런` : ""} ${r.SO}탈삼진`;
+    const pitchers = st ? st.rows.map((r) => {
+      const t = r.side === "home" ? g.home : g.away, a = act[r.team];
+      return `<div class="fx-row">${tchip(t)}<div class="fx-main"><strong>${esc(r.name)}</strong><span>${a ? `실제 ${pline(a)}` : `예상 ${pline(r)}`}</span>${a ? `<span class="muted">예상 ${pline(r)}</span>` : ""}</div></div>`;
+    }).join("") : `<p class="muted" style="margin:0">선발 ${esc(sp.away || "미발표")} vs ${esc(sp.home || "미발표")}</p>`;
+    let hitters = "";
+    if (fin && (g.result.hit_top5 || []).length) {
+      hitters = g.result.hit_top5.slice(0, 5).map((x) => `<div class="fx-hit"><span class="nm">${esc(x.name)} <small>${esc(x.team)}</small></span><span class="mono">${pct(x.p, 0)}</span><span class="mono act">${esc(x.actual)}</span><span class="mark ${x.ok ? "ok" : "miss"}">${x.ok ? "O" : "X"}</span></div>`).join("");
+    } else if (lu) {
+      const all = lu.teams.flatMap((tm) => tm.rows.map((r) => ({ ...r, side: tm.side, team: tm.team })));
+      all.sort((a, b) => b.p_hit - a.p_hit);
+      hitters = all.slice(0, 5).map((r) => `<div class="fx-hit"><span class="nm">${esc(r.name)} <small>${esc(r.team)} · ${r.order}번</small></span><span class="hbar" style="--c:${r.side === "home" ? c.home : c.away}"><span class="t"><span style="width:${r.p_hit * 100}%"></span></span><span class="v">${pct(r.p_hit, 0)}</span></span></div>`).join("");
+    }
+    const s = g.series;
+    let series = "";
+    if (s) {
+      const T = s.top === g.home.id ? g.home : g.away;
+      const total = s.need * 2 - 1, cur = s.state[0] + s.state[1];
+      const slots = [];
+      for (let i = 0; i < total; i++) {
+        const pl = (s.played || []).find((p) => p.no === i + 1);
+        const nx = s.games.find((x) => x.no === i + 1);
+        if (pl) slots.push(`<span class="slot done" style="--c:${pl.winner === g.home.id ? c.home : c.away}" title="${i + 1}차전 ${esc(pl.winner)} 승">${esc(pl.winner)}</span>`);
+        else if (i === cur && fin) slots.push(`<span class="slot done" style="--c:${g.result.home > g.result.away ? c.home : c.away}">${esc(g.result.home > g.result.away ? g.home.id : g.away.id)}</span>`);
+        else if (i < cur) slots.push(`<span class="slot done" style="--c:var(--neutral-team)">${i + 1}</span>`);
+        else slots.push(`<span class="slot${i === cur ? " now" : ""}" title="${i + 1}차전${nx ? ` 열릴 확률 ${pct(nx.p_played, 0)}` : ""}">${i + 1}${nx && nx.p_played < 1 ? `<small>${pct(nx.p_played, 0)}</small>` : ""}</span>`);
+      }
+      series = `<div class="fx-series"><div class="fx-big"><span class="num">${pct(s.p_top, 0)}</span><span>${esc(T.id)} 시리즈 통과 확률${fin ? " (경기 전)" : ""}</span></div>
+        <div class="slots">${slots.join("")}</div><span class="muted" style="font-size:12px">${esc(s.name)} · ${esc(s.format)} · 현재 ${esc(s.top)} ${s.state[0]}-${s.state[1]}</span></div>`;
+    }
+    const ok = gradeOf(g);
+    return `<section class="feature" style="--ca:${c.away};--ch:${c.home}">
+      <div class="feature-in">
+        <div class="match-meta"><span class="eyebrow">${esc(label)} · ${esc(stageTxt(g))} · ${fdate(g.date)} ${esc(g.start || "")} · ${esc(g.venue || "")}</span>
+          <span style="display:flex;gap:6px;flex-wrap:wrap">${g.official ? '<span class="chip official">경기 전 공개</span>' : '<span class="chip">참고용 · 경기 중 공개</span>'}${fin ? `<span class="chip ${ok ? "ok" : ok === false ? "miss" : ""}">${ok == null ? "경기 종료" : ok ? "승리 예측 적중" : "승리 예측 빗나감"}</span>` : ""}</span></div>
+        <div class="fmatch">
+          <div class="fteam">${tchip(g.away, true)}<div><div class="nm">${esc(g.away.name)}</div><div class="sub">원정 · ${esc(sp.away || "선발 미발표")}</div></div><div class="fpct num">${pct(P.win.away)}</div></div>
+          <div class="fcenter">${fin ? `<div class="big num">${g.result.away}<i>:</i>${g.result.home}</div><div class="cap">최종 · 예상 ${f2(P.score.away, 1)} : ${f2(P.score.home, 1)}</div>` : `<div class="big num">${f2(P.score.away, 1)}<i>:</i>${f2(P.score.home, 1)}</div><div class="cap">예상 득점</div>`}</div>
+          <div class="fteam home">${tchip(g.home, true)}<div><div class="nm">${esc(g.home.name)}</div><div class="sub">홈 · ${esc(sp.home || "선발 미발표")}</div></div><div class="fpct num">${pct(P.win.home)}</div></div>
+        </div>
+        <div class="pbar-track thick" role="img" aria-label="승리 확률"><span style="width:${P.win.away * 100}%;background:${c.away}"></span><span style="width:${P.win.home * 100}%;background:${c.home}"></span></div>
+        ${P.headline ? `<div class="headline">${esc(P.headline)}</div>` : ""}
+        <div class="fgrid">
+          <div class="fx"><div class="eyebrow">선발 맞대결</div>${pitchers}</div>
+          ${hitters ? `<div class="fx"><div class="eyebrow">${fin ? "안타 확률 TOP 5 채점" : "안타 확률 TOP 5"}</div>${hitters}</div>` : ""}
+          ${series ? `<div class="fx"><div class="eyebrow">시리즈</div>${series}</div>` : scoreMini(P, g, c)}
+        </div>
+        <div class="fcta"><a class="btn" href="#g.${g.league}.${g.id}">스코어 분포 · 18명 예상 기록 · 전력 비교 보기 →</a><span class="mono muted">예측 공개 ${stamp(g.published_at)} KST</span></div>
+      </div></section>`;
+  }
+
+  function scoreMini(P, g, c) {
+    const ts = (P.top_scores || []).slice(0, 4);
+    if (!ts.length) return "";
+    return `<div class="fx"><div class="eyebrow">유력 스코어</div>${ts.map((s) => `<div class="fx-hit"><span class="nm">${esc(g.away.id)} ${s.away}:${s.home} ${esc(g.home.id)}</span><span class="mono">${pct(s.p)}</span></div>`).join("")}</div>`;
   }
 
   function gameCard(g) {
     const fin = g.status === "final" && g.result;
     const win = g.win || { home: 0.5, away: 0.5 };
-    const st = g.stage && g.stage.kind === "postseason" ? `${esc(g.stage.name)}${g.stage.game_no ? ` ${g.stage.game_no}차전` : ""}` : "정규시즌";
-    let chip = g.official ? '<span class="chip official">경기 전 공개</span>' : '<span class="chip">참고용 · 경기 중 공개</span>';
-    if (fin && g.result.graded && g.result.graded.win_ok != null) chip = g.result.graded.win_ok ? '<span class="chip ok">적중</span>' : '<span class="chip miss">빗나감</span>';
+    const ok = gradeOf(g);
+    let chip = g.official ? '<span class="chip official">경기 전 공개</span>' : '<span class="chip">참고용</span>';
+    if (fin && ok != null) chip = `<span class="chip ${ok ? "ok" : "miss"}">${ok ? "적중" : "빗나감"}${g.official ? "" : " · 참고"}</span>`;
     const sp = g.starters || {};
     return `<a class="gcard" href="#g.${g.league}.${g.id}">
-      <div class="gcard-top"><span class="eyebrow">${st} · ${fdate(g.date)} ${esc(g.start || "")}</span>${chip}</div>
+      <div class="gcard-top"><span class="eyebrow">${esc(stageTxt(g))} · ${fdate(g.date)} ${esc(g.start || "")}</span>${chip}</div>
       <div class="gcard-teams">
         <div class="gteam">${tchip(g.away)}<span class="nm">${esc(g.away.name)}</span><span class="sp">${sp.away ? `선발 ${esc(sp.away)}` : "원정"}</span></div>
         <div class="gscore">${fin ? `<span>${g.result.away}</span><i>:</i><span>${g.result.home}</span>` : `<div><div style="display:flex;gap:10px;align-items:center"><span>${f2(g.score?.away, 1)}</span><i>:</i><span>${f2(g.score?.home, 1)}</span></div><span class="exp">예상 득점</span></div>`}</div>
         <div class="gteam home">${tchip(g.home)}<span class="nm">${esc(g.home.name)}</span><span class="sp">${sp.home ? `선발 ${esc(sp.home)}` : "홈"}</span></div>
       </div>
       ${pbar(g, win)}
-      ${g.headline ? `<div class="gcard-head">${esc(g.headline)}</div>` : ""}
-      <div class="gcard-foot"><span>${esc(g.venue || "")}${g.series ? ` · 시리즈 ${esc(g.series.top)} ${g.series.state[0]}-${g.series.state[1]} ${esc(g.series.bottom)}` : ""}</span><span>${g.published_at ? `공개 ${stamp(g.published_at).slice(5)}` : ""}</span></div>
     </a>`;
   }
 
   function upRow(g) {
+    const e = g.early;
+    const c = pair(g.home, g.away);
     return `<div class="up-row"><div class="when">${fdate(g.date)}<small>${esc(g.start || "")} · ${esc(g.venue || "")}</small></div>
-      <div class="vs">${tchip(g.away)} <span class="muted" style="font-weight:400">vs</span> ${tchip(g.home)} <span style="font-weight:500">${esc(g.title || "")}</span></div>
-      <span class="chip">예측 대기</span></div>`;
+      <div style="display:grid;gap:8px;min-width:0">
+        <div class="vs">${tchip(g.away)} <span class="muted" style="font-weight:400">@</span> ${tchip(g.home)} <span style="font-weight:500">${esc((g.title || "").replace(/^KBO\s*/, ""))}</span></div>
+        ${e ? `<div class="early"><span class="mono">${esc(g.away.id)} ${pct(e.away, 0)}</span><span class="pbar-track"><span style="width:${e.away * 100}%;background:${c.away}"></span><span style="width:${e.home * 100}%;background:${c.home}"></span></span><span class="mono">${pct(e.home, 0)} ${esc(g.home.id)}</span></div>` : ""}
+      </div>
+      <span class="chip" title="선발 발표 전, 팀 전력만으로 본 참고 확률">${e ? "전력 기준 · 참고" : "예측 대기"}</span></div>`;
+  }
+
+  function resultRow(g) {
+    const ok = gradeOf(g);
+    const fav = g.win.home >= 0.5 ? g.home : g.away;
+    const hw = g.result.home > g.result.away;
+    return `<a class="res-row" href="#g.${g.league}.${g.id}">
+      <span class="mono muted">${fdate(g.date)}</span>
+      <span class="res-sc"><b class="${hw ? "" : "w"}">${esc(g.away.id)} ${g.result.away}</b><i>:</i><b class="${hw ? "w" : ""}">${g.result.home} ${esc(g.home.id)}</b></span>
+      <span class="muted res-pick">예측 ${esc(fav.id)} ${pct(Math.max(g.win.home, g.win.away), 0)}</span>
+      <span class="mark ${ok ? "ok" : "miss"}">${ok == null ? "무" : ok ? "적중" : "빗나감"}${g.official ? "" : "<small> 참고</small>"}</span></a>`;
   }
 
   /* ───────── 경기 상세 ───────── */
@@ -193,7 +310,7 @@
     const panels = (g.panels || []).map((p) => (PANELS[p.type] ? PANELS[p.type](p, g, c) : "")).join("");
     return `
       <div class="crumbs"><a href="#${lgId}">경기 예측</a><span>/</span><span>${esc(g.title)}</span></div>
-      <article class="match">
+      <article class="match" style="--ca:${c.away};--ch:${c.home}">
         <div class="match-band"><span style="background:${c.away}"></span><span style="background:${c.home}"></span></div>
         <div class="match-body">
           <div class="match-meta">
@@ -514,7 +631,7 @@
       <div class="panel flush"><div class="tablewrap"><table class="box"><thead><tr>
         <th class="l">순위</th><th class="l">팀</th><th>전력 점수</th><th>30일 변화</th><th>평균 팀 상대 승률</th><th>득점력</th><th>불펜 9이닝당 실점</th><th>시즌</th><th>최근 10경기</th><th>경기당 득실</th><th class="l">주요 선발</th>
       </tr></thead><tbody>
-      ${t.teams.map((r, i) => { const w = (Math.abs(r.rating) / mx) * 50; const c = lum(r.color) < 0.08 ? "var(--dark-team)" : r.color; return `<tr>
+      ${t.teams.map((r, i) => { const w = (Math.abs(r.rating) / mx) * 50; const c = lift(r.color); return `<tr>
         <td class="order l">${i + 1}</td>
         <td class="l name"><span style="display:inline-flex;gap:8px;align-items:center"><span class="tchip" style="--tc:${esc(r.color)}">${esc(r.id)}</span>${esc(r.name)}</span></td>
         <td><span class="rank-rating"><span class="t"><span style="--c:${c};${r.rating >= 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`}"></span></span><span class="mono">${r.rating > 0 ? "+" : ""}${f2(r.rating, 0)}</span></span></td>
