@@ -67,6 +67,7 @@
       <header class="topbar gutter"><div class="wrap">
         <a class="brand" href="#${cur}"><span class="brand-mark" aria-hidden="true"></span><span class="brand-name">${esc(idx.brand.name)}</span></a>
         <nav class="nav" aria-label="주요 메뉴">${nav.map(([v, href, label]) => `<a href="${href}"${r.view === v ? ' aria-current="page"' : ""}>${label}</a>`).join("")}</nav>
+        <a class="follow" href="${esc(idx.brand.threads)}" target="_blank" rel="noopener">쓰레드 팔로우</a>
       </div></header>
       ${r.view === "method" ? "" : `<div class="leaguebar gutter"><div class="wrap" role="group" aria-label="리그 선택">
         ${idx.leagues.map((l) => `<button class="lg-tab" data-lg="${l.id}" aria-pressed="${l.id === cur}"><span class="dot${l.status === "live" ? " live" : ""}"></span>${esc(l.name)} <small>${l.status === "live" ? esc(l.label) : "준비 중"}</small></button>`).join("")}
@@ -164,6 +165,7 @@
     const offN = rec.games || 0;
     return `
       ${feat ? featureBlock(feat, todays.length ? "오늘의 경기" : feat.status === "final" ? "최근 경기 결과" : "최근 예측") : `<div class="empty"><strong>예측 준비 중</strong>선발투수가 발표되면 경기 3시간 전쯤 자동으로 올라옵니다.</div>`}
+      ${feat ? mediaSection(feat, "오늘의 리포트") : ""}
       ${others.length ? `<section class="section"><h2>오늘의 다른 경기</h2><div class="gcards">${others.map(gameCard).join("")}</div></section>` : ""}
       <section class="section">
         <div class="section-head"><h2>예측 성적표</h2><p>경기 전에 공개하고, 끝나면 그대로 채점합니다 · <a href="#record.${lgId}">전체 기록 →</a></p></div>
@@ -184,7 +186,8 @@
           <div class="section-head"><h2>최근 결과</h2><p>예측한 쪽과 실제 결과</p></div>
           ${recent.length ? `<div class="panel flush">${recent.map(resultRow).join("")}</div>` : '<div class="empty"><strong>채점된 경기가 아직 없어요</strong>경기가 끝나면 자동으로 채점됩니다.</div>'}
         </section>
-      </div>`;
+      </div>
+      ${premiumBand()}`;
   }
 
   function meter(v, lo, hi, label) {
@@ -193,8 +196,64 @@
     return `<span class="meter" aria-hidden="true"><span style="width:${x}%"></span></span><span class="s">${label} 대비 +${((v - lo) * 100).toFixed(1)}%p</span>`;
   }
 
-  function featureBlock(g, label) {
+  /* ───────── 매치업 포스터 (홈·경기 상세 공용) ───────── */
+  // 야간 경기장 그림: 조명탑 빛, 내야 다이아몬드, 파울 라인 (저작권 없는 자체 그래픽)
+  function stadiumArt() {
+    return `<svg class="stadium" viewBox="0 0 1200 420" preserveAspectRatio="xMidYMax slice" aria-hidden="true">
+      <defs>
+        <radialGradient id="lt1" cx="0.14" cy="-0.05" r="0.55"><stop offset="0" stop-color="#FFF4D6" stop-opacity=".55"/><stop offset=".35" stop-color="#F5C46B" stop-opacity=".16"/><stop offset="1" stop-color="#F5C46B" stop-opacity="0"/></radialGradient>
+        <radialGradient id="lt2" cx="0.86" cy="-0.05" r="0.55"><stop offset="0" stop-color="#FFF4D6" stop-opacity=".55"/><stop offset=".35" stop-color="#F5C46B" stop-opacity=".16"/><stop offset="1" stop-color="#F5C46B" stop-opacity="0"/></radialGradient>
+        <linearGradient id="turf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0E5A44" stop-opacity="0"/><stop offset="1" stop-color="#0E5A44" stop-opacity=".55"/></linearGradient>
+        <filter id="grain"><feTurbulence type="fractalNoise" baseFrequency=".9" numOctaves="2" stitchTiles="stitch"/><feColorMatrix values="0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 .06 0"/></filter>
+      </defs>
+      <rect width="1200" height="420" fill="url(#turf)"/>
+      <rect width="1200" height="420" fill="url(#lt1)"/><rect width="1200" height="420" fill="url(#lt2)"/>
+      <g fill="none" stroke="#FFFFFF" stroke-opacity=".13" stroke-width="1.5">
+        <path d="M600 520 L-120 60 M600 520 L1320 60"/>
+        <path d="M-120 60 Q600 -170 1320 60"/>
+        <path d="M600 470 L430 330 L600 205 L770 330 Z"/>
+        <path d="M330 300 Q600 120 870 300" stroke-opacity=".08"/>
+        <circle cx="600" cy="335" r="18" stroke-opacity=".1"/>
+      </g>
+      <g fill="#FFF4D6" fill-opacity=".8"><circle cx="150" cy="18" r="2.2"/><circle cx="168" cy="16" r="2.2"/><circle cx="186" cy="18" r="2.2"/><circle cx="1014" cy="18" r="2.2"/><circle cx="1032" cy="16" r="2.2"/><circle cx="1050" cy="18" r="2.2"/></g>
+      <rect width="1200" height="420" filter="url(#grain)"/>
+    </svg>`;
+  }
+
+  const avatar = (name, color) => `<span class="ava" style="--c:${color}" aria-hidden="true">${esc((name || "?").slice(0, 1))}</span>`;
+
+  function poster(g, opts = {}) {
     const P = g.prediction, c = pair(g.home, g.away);
+    const fin = g.status === "final" && g.result;
+    const sp = g.starters || {};
+    const ok = gradeOf(g);
+    const favHome = P.win.home >= P.win.away;
+    const side = (t, s, w, isHome) => `
+      <div class="ps-team ${isHome ? "home" : "away"}${(isHome ? favHome : !favHome) ? " fav" : ""}" style="--tc:${s}">
+        <span class="ps-ghost" aria-hidden="true">${esc(t.id)}</span>
+        <div class="ps-id"><span class="tchip lg" style="--tc:${esc(t.color)}">${esc(t.id)}</span><div><div class="nm">${esc(t.name)}</div><div class="sub">${isHome ? "홈" : "원정"} · 선발 ${esc((isHome ? sp.home : sp.away) || "미발표")}</div></div></div>
+        <div class="ps-pct num">${pct(w)}</div>
+        <div class="ps-cap">${fin ? (isHome ? g.result.home : g.result.away) + "점" : "승리 확률"}</div>
+      </div>`;
+    return `<section class="poster bleed" style="--ca:${c.away};--ch:${c.home}">
+      ${stadiumArt()}
+      <div class="poster-in gutter"><div class="wrap">
+        <div class="ps-meta"><span class="eyebrow">${esc(opts.label ? opts.label + " · " : "")}${esc(stageTxt(g))} · ${fdate(g.date, !!opts.game)} ${esc(g.start || "")} · ${esc(g.venue || "")}</span>
+          <span class="ps-chips">${g.official ? '<span class="chip official">경기 전 공개</span>' : '<span class="chip dim">참고용 · 경기 중 공개</span>'}${fin ? `<span class="chip ${ok ? "ok" : ok === false ? "miss" : "dim"}">${ok == null ? "경기 종료" : ok ? "승리 예측 적중" : "승리 예측 빗나감"}</span>` : ""}</span></div>
+        <div class="ps-grid">
+          ${side(g.away, c.away, P.win.away, false)}
+          <div class="ps-mid">${fin ? `<div class="ps-score num">${g.result.away}<i>:</i>${g.result.home}</div><div class="ps-cap">최종 · 예상 ${f2(P.score.away, 1)} : ${f2(P.score.home, 1)}</div>` : `<div class="ps-vs">VS</div><div class="ps-score sm num">${f2(P.score.away, 1)}<i>:</i>${f2(P.score.home, 1)}</div><div class="ps-cap">예상 득점</div>`}</div>
+          ${side(g.home, c.home, P.win.home, true)}
+        </div>
+        <div class="pbar-track thick ps-bar" role="img" aria-label="승리 확률 ${esc(g.away.id)} ${pct(P.win.away)}, ${esc(g.home.id)} ${pct(P.win.home)}"><span style="width:${P.win.away * 100}%;background:${c.away}"></span><span style="width:${P.win.home * 100}%;background:${c.home}"></span></div>
+        ${P.headline ? `<p class="ps-head">${esc(P.headline)}</p>` : ""}
+        ${opts.after || ""}
+      </div></div>
+    </section>`;
+  }
+
+  function featureBlock(g, label) {
+    const c = pair(g.home, g.away);
     const fin = g.status === "final" && g.result;
     const sp = g.starters || {};
     const st = (g.panels || []).find((p) => p.type === "baseball.starters");
@@ -204,15 +263,15 @@
     const pline = (r) => `${r.ip}이닝 ${r.H}피안타 ${r.R}실점${r.HR ? ` ${r.HR}피홈런` : ""} ${r.SO}탈삼진`;
     const pitchers = st ? st.rows.map((r) => {
       const t = r.side === "home" ? g.home : g.away, a = act[r.team];
-      return `<div class="fx-row">${tchip(t)}<div class="fx-main"><strong>${esc(r.name)}</strong><span>${a ? `실제 ${pline(a)}` : `예상 ${pline(r)}`}</span>${a ? `<span class="muted">예상 ${pline(r)}</span>` : ""}</div></div>`;
+      return `<div class="fx-row">${avatar(r.name, r.side === "home" ? c.home : c.away)}<div class="fx-main"><strong>${esc(r.name)} <small class="muted">${esc(t.id)}</small></strong><span>${a ? `실제 ${pline(a)}` : `예상 ${pline(r)}`}</span>${a ? `<span class="muted">예상 ${pline(r)}</span>` : ""}</div></div>`;
     }).join("") : `<p class="muted" style="margin:0">선발 ${esc(sp.away || "미발표")} vs ${esc(sp.home || "미발표")}</p>`;
     let hitters = "";
     if (fin && (g.result.hit_top5 || []).length) {
-      hitters = g.result.hit_top5.slice(0, 5).map((x) => `<div class="fx-hit"><span class="nm">${esc(x.name)} <small>${esc(x.team)}</small></span><span class="mono">${pct(x.p, 0)}</span><span class="mono act">${esc(x.actual)}</span><span class="mark ${x.ok ? "ok" : "miss"}">${x.ok ? "O" : "X"}</span></div>`).join("");
+      hitters = g.result.hit_top5.slice(0, 5).map((x) => `<div class="fx-hit act-row">${avatar(x.name, x.team === g.home.id ? c.home : c.away)}<span class="nm">${esc(x.name)} <small>${esc(x.team)}</small></span><span class="mono">${pct(x.p, 0)}</span><span class="mono act">${esc(x.actual)}</span><span class="mark ${x.ok ? "ok" : "miss"}">${x.ok ? "O" : "X"}</span></div>`).join("");
     } else if (lu) {
       const all = lu.teams.flatMap((tm) => tm.rows.map((r) => ({ ...r, side: tm.side, team: tm.team })));
       all.sort((a, b) => b.p_hit - a.p_hit);
-      hitters = all.slice(0, 5).map((r) => `<div class="fx-hit"><span class="nm">${esc(r.name)} <small>${esc(r.team)} · ${r.order}번</small></span><span class="hbar" style="--c:${r.side === "home" ? c.home : c.away}"><span class="t"><span style="width:${r.p_hit * 100}%"></span></span><span class="v">${pct(r.p_hit, 0)}</span></span></div>`).join("");
+      hitters = all.slice(0, 5).map((r) => { const col = r.side === "home" ? c.home : c.away; return `<div class="fx-hit">${avatar(r.name, col)}<span class="nm">${esc(r.name)} <small>${esc(r.team)} · ${r.order}번</small></span><span class="hbar" style="--c:${col}"><span class="t"><span style="width:${r.p_hit * 100}%"></span></span><span class="v">${pct(r.p_hit, 0)}</span></span></div>`; }).join("");
     }
     const s = g.series;
     let series = "";
@@ -231,25 +290,48 @@
       series = `<div class="fx-series"><div class="fx-big"><span class="num">${pct(s.p_top, 0)}</span><span>${esc(T.id)} 시리즈 통과 확률${fin ? " (경기 전)" : ""}</span></div>
         <div class="slots">${slots.join("")}</div><span class="muted" style="font-size:12px">${esc(s.name)} · ${esc(s.format)} · 현재 ${esc(s.top)} ${s.state[0]}-${s.state[1]}</span></div>`;
     }
-    const ok = gradeOf(g);
-    return `<section class="feature" style="--ca:${c.away};--ch:${c.home}">
-      <div class="feature-in">
-        <div class="match-meta"><span class="eyebrow">${esc(label)} · ${esc(stageTxt(g))} · ${fdate(g.date)} ${esc(g.start || "")} · ${esc(g.venue || "")}</span>
-          <span style="display:flex;gap:6px;flex-wrap:wrap">${g.official ? '<span class="chip official">경기 전 공개</span>' : '<span class="chip">참고용 · 경기 중 공개</span>'}${fin ? `<span class="chip ${ok ? "ok" : ok === false ? "miss" : ""}">${ok == null ? "경기 종료" : ok ? "승리 예측 적중" : "승리 예측 빗나감"}</span>` : ""}</span></div>
-        <div class="fmatch">
-          <div class="fteam">${tchip(g.away, true)}<div><div class="nm">${esc(g.away.name)}</div><div class="sub">원정 · ${esc(sp.away || "선발 미발표")}</div></div><div class="fpct num">${pct(P.win.away)}</div></div>
-          <div class="fcenter">${fin ? `<div class="big num">${g.result.away}<i>:</i>${g.result.home}</div><div class="cap">최종 · 예상 ${f2(P.score.away, 1)} : ${f2(P.score.home, 1)}</div>` : `<div class="big num">${f2(P.score.away, 1)}<i>:</i>${f2(P.score.home, 1)}</div><div class="cap">예상 득점</div>`}</div>
-          <div class="fteam home">${tchip(g.home, true)}<div><div class="nm">${esc(g.home.name)}</div><div class="sub">홈 · ${esc(sp.home || "선발 미발표")}</div></div><div class="fpct num">${pct(P.win.home)}</div></div>
-        </div>
-        <div class="pbar-track thick" role="img" aria-label="승리 확률"><span style="width:${P.win.away * 100}%;background:${c.away}"></span><span style="width:${P.win.home * 100}%;background:${c.home}"></span></div>
-        ${P.headline ? `<div class="headline">${esc(P.headline)}</div>` : ""}
-        <div class="fgrid">
+    const after = `<div class="fgrid">
           <div class="fx"><div class="eyebrow">선발 맞대결</div>${pitchers}</div>
           ${hitters ? `<div class="fx"><div class="eyebrow">${fin ? "안타 확률 TOP 5 채점" : "안타 확률 TOP 5"}</div>${hitters}</div>` : ""}
-          ${series ? `<div class="fx"><div class="eyebrow">시리즈</div>${series}</div>` : scoreMini(P, g, c)}
+          ${series ? `<div class="fx"><div class="eyebrow">시리즈</div>${series}</div>` : scoreMini(g.prediction, g, c)}
         </div>
-        <div class="fcta"><a class="btn" href="#g.${g.league}.${g.id}">스코어 분포 · 18명 예상 기록 · 전력 비교 보기 →</a><span class="mono muted">예측 공개 ${stamp(g.published_at)} KST</span></div>
-      </div></section>`;
+        <div class="fcta"><a class="btn light" href="#g.${g.league}.${g.id}">스코어 분포 · 18명 예상 기록 · 전력 비교 보기 →</a><span class="mono ps-stamp">예측 공개 ${stamp(g.published_at)} KST · 공개 후 수정하지 않습니다</span></div>`;
+    return poster(g, { label, after });
+  }
+
+  /* 쓰레드에 올라간 리포트 이미지 */
+  const MEDIA_ORDER = [["pre", "경기 프리뷰"], ["hits", "선수 예상 기록"], ["result", "결과 채점"]];
+  function mediaItems(g) {
+    const m = g.media || {};
+    const out = [];
+    MEDIA_ORDER.forEach(([k, label]) => {
+      ((m[k] || {}).images || []).forEach((u, i) => out.push({ u, label: i ? `${label} ${i + 1}` : label, link: m[k].link, at: m[k].at }));
+    });
+    return out;
+  }
+  function mediaSection(g, title) {
+    const items = mediaItems(g);
+    if (!items.length) return "";
+    const th = S.index.brand.threads;
+    return `<section class="section">
+      <div class="section-head"><h2>${esc(title || "리포트 이미지")}</h2><p>쓰레드에 올라간 그대로 · <a href="${esc(th)}" target="_blank" rel="noopener">@sports_presense</a></p></div>
+      <div class="media-strip">${items.map((x) => `<a class="media" href="${esc(x.link || x.u)}" target="_blank" rel="noopener"><img src="${esc(x.u)}" alt="${esc(g.title)} ${esc(x.label)}" loading="lazy" width="1080" height="1350"><span class="media-cap"><b>${esc(x.label)}</b><span class="mono">${esc((x.at || "").slice(5))}</span></span></a>`).join("")}</div>
+    </section>`;
+  }
+
+  function premiumBand() {
+    return `<section class="premium bleed"><div class="gutter"><div class="wrap premium-in">
+      <div class="premium-copy"><span class="eyebrow">프리미엄 분석 · 준비 중</span>
+        <h2>매일 모든 경기, 한 번에 받아보기</h2>
+        <p>지금은 주요 경기만 무료로 공개하고 있어요. 공식 기록이 충분히 쌓이면 전 경기 심층 리포트와 MLB·EPL 분석을 함께 여는 구독을 준비하고 있습니다.</p>
+        <div class="premium-cta"><a class="btn amber" href="${esc(S.index.brand.threads)}" target="_blank" rel="noopener">쓰레드 팔로우하고 오픈 소식 받기</a><a class="btn ghost" href="#record.${S.league}">지금까지의 기록 보기</a></div></div>
+      <ul class="premium-list">
+        <li><b>전 경기 리포트</b><span>하루 5경기 모두 승리 확률·스코어 분포·선수 예상 기록</span></li>
+        <li><b>라인업 발표 즉시 갱신</b><span>선발 라인업이 나오면 선수별 예상치를 바로 다시 계산</span></li>
+        <li><b>시즌 시뮬레이션</b><span>순위·포스트시즌 진출 확률을 매일 업데이트</span></li>
+        <li><b>리그 확장</b><span>MLB · EPL · NBA를 같은 방식으로 검증 후 공개</span></li>
+      </ul>
+    </div></div></section>`;
   }
 
   function scoreMini(P, g, c) {
@@ -310,25 +392,10 @@
     const panels = (g.panels || []).map((p) => (PANELS[p.type] ? PANELS[p.type](p, g, c) : "")).join("");
     return `
       <div class="crumbs"><a href="#${lgId}">경기 예측</a><span>/</span><span>${esc(g.title)}</span></div>
-      <article class="match" style="--ca:${c.away};--ch:${c.home}">
-        <div class="match-band"><span style="background:${c.away}"></span><span style="background:${c.home}"></span></div>
-        <div class="match-body">
-          <div class="match-meta">
-            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><span class="eyebrow">${esc(st)} · ${fdate(g.date, true)} ${esc(g.start || "")} · ${esc(g.venue || "")}</span></div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap">${g.official ? '<span class="chip official">경기 전 공개 · 공식 기록</span>' : '<span class="chip">경기 시작 후 공개 · 공식 기록 제외</span>'}${fin ? '<span class="chip">경기 종료</span>' : ""}</div>
-          </div>
-          <div class="match-teams">
-            <div class="mteam">${tchip(g.away, true)}<div><div class="nm">${esc(g.away.name)}</div><div class="sub">원정 · 선발 ${esc(sp.away || "미발표")}</div></div></div>
-            <div class="mcenter">${fin ? `<div class="big">${g.result.away}<i>:</i>${g.result.home}</div><div class="cap">최종 스코어 · 예상 ${f2(P.score.away, 1)} : ${f2(P.score.home, 1)}</div>` : `<div class="big">${f2(P.score.away, 1)}<i>:</i>${f2(P.score.home, 1)}</div><div class="cap">예상 득점</div>`}</div>
-            <div class="mteam home">${tchip(g.home, true)}<div><div class="nm">${esc(g.home.name)}</div><div class="sub">홈 · 선발 ${esc(sp.home || "미발표")}</div></div></div>
-          </div>
-          ${pbar(g, P.win)}
-          ${P.headline ? `<div class="headline">${esc(P.headline)}</div>` : ""}
-          <div class="proof"><span class="mono">예측 공개 ${stamp(g.published_at)} KST</span>${proof ? `<span>·</span>${proof}` : ""}<span>·</span><span>공개 이후 예측값은 수정하지 않습니다</span></div>
-        </div>
-      </article>
+      ${poster(g, { game: true, after: `<div class="proof ps-proof"><span class="mono">예측 공개 ${stamp(g.published_at)} KST</span>${proof ? `<span>·</span>${proof}` : ""}<span>·</span><span>공개 이후 예측값은 수정하지 않습니다</span></div>` })}
       ${fin ? resultSection(g, c) : ""}
       ${scoreSection(g, c)}
+      ${mediaSection(g)}
       ${factorSection(g, c)}
       ${panels}
       ${g.series ? seriesSection(g, c) : ""}`;
