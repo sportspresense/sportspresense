@@ -411,13 +411,35 @@
         <div><span class="k">승리 예측</span><span class="v">${esc(fav.id)} ${pct(Math.max(g.prediction.win.home, g.prediction.win.away))}</span><span class="${gr.win_ok ? "mark ok" : "mark miss"}">${gr.win_ok == null ? "무승부" : gr.win_ok ? "적중" : "빗나감"}</span></div>
         <div><span class="k">예상 → 실제 (${esc(g.away.id)}:${esc(g.home.id)})</span><span class="v">${f2(g.prediction.score.away, 1)}:${f2(g.prediction.score.home, 1)} <small>→ ${R.away}:${R.home}</small></span></div>
         <div><span class="k">Brier 점수</span><span class="v">${f2(gr.brier, 3)}</span><span class="k">0에 가까울수록 정확</span></div>
-        <div><span class="k">안타 확률 TOP 5</span><span class="v">${top.filter((x) => x.ok).length}<small>/ ${top.length}명 안타</small></span></div>
+        ${top.length ? `<div><span class="k">안타 확률 TOP 5</span><span class="v">${top.filter((x) => x.ok).length}<small>/ ${top.length}명 안타</small></span></div>` : ""}
       </div>
+      ${R.analysis ? whyPanel(R.analysis, g, c) : ""}
       ${top.length ? `<div class="panel flush"><div class="tablewrap"><table class="box"><thead><tr><th class="l">순위</th><th class="l">선수</th><th>안타 확률</th><th>실제 기록</th><th>채점</th></tr></thead><tbody>
         ${top.map((x, i) => `<tr><td class="order l">${i + 1}</td><td class="l name">${esc(x.name)} <span class="muted" style="font-weight:400">${esc(x.team)}</span></td><td>${pct(x.p, 0)}</td><td class="act">${esc(x.actual)}</td><td><span class="mark ${x.ok ? "ok" : "miss"}">${x.ok ? "O" : "X"}</span></td></tr>`).join("")}
       </tbody></table></div></div>` : ""}
     </section>`;
   }
+
+  function whyPanel(A, g, c) {
+    const items = (A.items || []).slice(0, 4);
+    const mx = Math.max(3, ...items.map((x) => Math.abs(x.delta)));
+    const label = (x) => (x.part === "sp" ? `${esc(x.team)} 선발 ${esc(x.who)}` : `${esc(x.team)} 불펜`);
+    const head = A.summary.split(":")[0], body = A.summary.slice(head.length + 1).trim();
+    return `<div class="panel why">
+      <div class="why-head"><span class="chip ${A.ok ? "ok" : A.ok === false ? "miss" : ""}">${esc(head)}</span><strong>${esc(body)}</strong>${sampleChip(A.sample)}</div>
+      <div class="why-rows">${items.map((x) => {
+        const col = x.team === g.home.id ? c.home : c.away;
+        const w = (Math.min(Math.abs(x.delta), mx) / mx) * 50;
+        return `<div class="why-row"><span class="who">${avatar(x.part === "sp" ? x.who : x.team, col)}<span>${label(x)}<small>${x.part === "sp" ? `예상 ${ip_(x.exp_outs)}이닝 → 실제 ${ip_(x.act_outs)}이닝` : "선발 이후 이닝"}</small></span></span>
+          <span class="mono">예상 ${f2(x.exp, 1)} → 실제 ${x.act}실점</span>
+          <span class="dbar" title="예상보다 ${x.delta > 0 ? "더" : "덜"} 내준 점수"><span class="${x.delta > 0 ? "more" : "less"}" style="${x.delta > 0 ? `left:50%;width:${w}%` : `right:50%;width:${w}%`}"></span></span>
+          <span class="mono d ${x.delta > 0 ? "more" : "less"}">${x.delta > 0 ? "+" : ""}${f2(x.delta, 1)}</span></div>`;
+      }).join("")}</div>
+      <div class="why-foot">${(A.luck || []).map((l) => `<span class="chip">${esc(l)}</span>`).join("")}${A.hit_note ? `<span class="muted">${esc(A.hit_note)}</span>` : ""}</div>
+      <p class="chart-note">경기 전 정보로 계산한 예상 실점과 실제를 비교했어요. 막대가 오른쪽이면 예상보다 더 내준 것, 왼쪽이면 덜 내준 것이에요.</p>
+    </div>`;
+  }
+  const ip_ = (o) => { const n = Math.round(o); return `${Math.floor(n / 3)}${n % 3 ? "." + (n % 3) : ""}`; };
 
   function scoreSection(g, c) {
     const P = g.prediction;
@@ -578,7 +600,7 @@
 
   /* ───────── 적중 기록 ───────── */
   async function viewRecord(lgId) {
-    const [rec, bt] = await Promise.all([tryLoad(`${lgId}/record.json`), tryLoad(`${lgId}/backtest.json`)]);
+    const [rec, bt, mdl] = await Promise.all([tryLoad(`${lgId}/record.json`), tryLoad(`${lgId}/backtest.json`), tryLoad(`${lgId}/model.json`)]);
     const sm = (rec && rec.summary) || { games: 0 };
     const off = sm.games ? `
       <div class="kv">
@@ -593,8 +615,8 @@
         <div class="panel" style="display:grid;gap:10px"><h3>누적 적중률</h3>${lineChart(rec.cumulative.map((x) => x.acc), rec.cumulative.map((x) => fdate(x.date)))}</div>
         <div class="panel" style="display:grid;gap:10px"><h3>확률 보정</h3>${sm.games >= 20 ? calibChart(rec.calibration, [0.5, 0.8]) : `<div class="empty" style="padding:20px"><strong>${sm.games}/20경기</strong>확률 보정은 20경기가 쌓이면 표시돼요. 표본이 적으면 우연이 크게 작용합니다.</div>`}<p class="chart-note">예: 60%라고 한 경기들은 실제로 60% 가까이 이겼는지. 대각선에 가까울수록 믿을 만한 확률이에요.</p></div>
       </div>
-      <div class="panel flush"><div class="tablewrap"><table class="box"><thead><tr><th class="l">날짜</th><th class="l">경기</th><th>예측</th><th>예상 스코어</th><th>실제</th><th>채점</th><th>안타 TOP5</th><th>공개 시각</th></tr></thead><tbody>
-        ${rec.games.map((r) => { const fav = r.p_home >= 0.5 ? r.home : r.away; return `<tr><td class="l mono">${fdate(r.date)}</td><td class="l name"><a href="#g.${lgId}.${r.id}">${esc(r.away)} @ ${esc(r.home)}</a></td><td>${esc(fav)} ${pct(Math.max(r.p_home, 1 - r.p_home))}</td><td class="mono">${f2(r.pred_score?.away, 1)}:${f2(r.pred_score?.home, 1)}</td><td class="n">${r.score.away}:${r.score.home}</td><td><span class="mark ${r.win_ok ? "ok" : "miss"}">${r.win_ok == null ? "무" : r.win_ok ? "적중" : "빗나감"}</span></td><td class="mono">${r.top5_hits}/${r.top5_n}</td><td class="mono muted">${stamp(r.published_at).slice(5)}</td></tr>`; }).join("")}
+      <div class="panel flush"><div class="tablewrap"><table class="box"><thead><tr><th class="l">날짜</th><th class="l">경기</th><th>예측</th><th>예상 스코어</th><th>실제</th><th>채점</th><th class="l">원인</th><th>안타 TOP5</th><th>공개 시각</th></tr></thead><tbody>
+        ${rec.games.map((r) => { const fav = r.p_home >= 0.5 ? r.home : r.away; return `<tr><td class="l mono">${fdate(r.date)}</td><td class="l name"><a href="#g.${lgId}.${r.id}">${esc(r.away)} @ ${esc(r.home)}</a></td><td>${esc(fav)} ${pct(Math.max(r.p_home, 1 - r.p_home))}</td><td class="mono">${f2(r.pred_score?.away, 1)}:${f2(r.pred_score?.home, 1)}</td><td class="n">${r.score.away}:${r.score.home}</td><td><span class="mark ${r.win_ok ? "ok" : "miss"}">${r.win_ok == null ? "무" : r.win_ok ? "적중" : "빗나감"}</span></td><td class="l" title="${esc(r.why || "")}">${esc(r.cause || "–")}</td><td class="mono">${r.top5_hits}/${r.top5_n}</td><td class="mono muted">${stamp(r.published_at).slice(5)}</td></tr>`; }).join("")}
       </tbody></table></div></div>` : `
       <div class="empty"><strong>공식 기록은 2026 준플레이오프 2차전부터 쌓입니다</strong>경기 시작 전에 공개된 예측만 집계해요. 경기가 끝나면 자동으로 채점되어 이 표에 한 줄씩 추가됩니다.</div>`;
     return `
@@ -602,7 +624,24 @@
       <h1 style="margin-top:8px">맞힌 것도, 틀린 것도 전부</h1>
       <p class="muted" style="max-width:62ch;margin:8px 0 0">공식 기록은 경기 시작 전에 공개한 예측만 셉니다. 백테스트는 시즌 전체를 날짜순으로 다시 돌려, 그날 경기 전까지 알 수 있던 정보만으로 예측한 결과예요.</p>
       <section class="section"><div class="section-head"><h2>공식 기록</h2><span class="chip official">경기 전 공개분</span></div>${off}</section>
+      ${learnSection(rec, mdl)}
       ${bt ? backtestSection(bt) : ""}`;
+  }
+
+  function learnSection(rec, mdl) {
+    const miss = ((rec || {}).causes || {}).miss || {};
+    const tot = Object.values(miss).reduce((a, b) => a + b, 0);
+    const hist = (mdl || {}).history || [];
+    return `<section class="section">
+      <div class="section-head"><h2>틀린 경기에서 배우기</h2><p>빗나간 경기는 원인을 나눠 기록하고, 매주 설정을 다시 맞춰봅니다</p></div>
+      <div class="grid-2">
+        <div class="panel" style="display:grid;gap:12px"><h3>빗나간 경기 원인</h3>
+          ${tot ? Object.entries(miss).map(([k, n]) => `<div class="ts-row" style="grid-template-columns:90px 1fr 60px"><span>${esc(k)}</span><span class="bar"><span style="width:${(n / tot) * 100}%;--c:var(--bad)"></span></span><span class="p">${n}경기</span></div>`).join("") : '<p class="chart-note">빗나간 공식 경기가 생기면 원인별로 쌓여요.</p>'}
+        </div>
+        <div class="panel" style="display:grid;gap:10px"><h3>모델 업데이트 기록</h3>
+          ${hist.length ? hist.slice(0, 6).map((h) => `<div class="mlog"><span class="chip ${h.adopted ? "ok" : ""}">${h.adopted ? "업데이트" : "유지"}</span><div><div>${esc(h.message)}</div><span class="mono muted">${stamp(h.at)}${h.suggestion ? ` · ${esc(h.suggestion)}` : ""}</span></div></div>`).join("") : '<p class="chart-note">매주 월요일 새벽에 자동으로 점검하고, 더 정확해질 때만 바꿉니다. 첫 점검 후 여기에 기록돼요.</p>'}
+        </div>
+      </div></section>`;
   }
 
   function backtestSection(bt) {
